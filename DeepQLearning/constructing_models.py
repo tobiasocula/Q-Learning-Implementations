@@ -2,6 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import tensorflow as tf
+import pandas as pd
+
+"""
+
+contains code for all applications made within this folder, being classes and functions.
+
+"""
 
 class Tester:
     def __init__(self, *model_args):
@@ -267,41 +274,91 @@ class Model2:
 
         if not self.trained:
             raise AssertionError()
+
+        Path(dirname).mkdir(parents=True, exist_ok=True)
+        self.main_model.save(Path(dirname) / f"{modelname}.keras")
+
+class ModelDeployer:
+    def __init__(self, modelpath, data, action_space):
+        """data is a T x (n_features) matrix (return matrix)
+        action_space is a (n_features) x (n_actions) matrix"""
+        self.model = tf.keras.models.load_model(modelpath)
+        self.data = data
+        self.action_space = action_space
+
+    def run(self, period):
+        if period > self.data.shape[0]:
+            raise AssertionError()
         
+        return_sequence = np.empty(self.data.shape[0] - period)
+        for t in range(period, self.data.shape[0]):
+            subset = self.data[t - period:t, :]
+            Q_values = self.model.predict(subset)
+            action_idx = np.argmax(Q_values)
+            weights = self.action_space[:, action_idx]
+            result_return = np.dot(weights, self.data[t, :])
+            return_sequence[t] = result_return
 
+        self.returns = return_sequence
+        self.cum_return = np.cumprod(self.returns + 1) - 1
+        self.returns_vola_ann = pd.Series(self.returns).rolling(252, min_periods=1).std().to_numpy()
+        self.sharpe = 255 * np.mean(self.cum_return) / (np.std(self.returns) * np.sqrt(255))
+        self.sortino = 255 * np.mean(self.cum_return) / (np.std(self.returns[self.returns < 0]) * np.sqrt(255))
 
-def construct_dqn_1(
-        n_actions, input_shape
-):
-    model = tf.keras.models.Sequential()
-    # Conv tf.keras.layers: for time series/financial data, use 1D conv (across time)
-    model.add(tf.keras.layers.Conv1D(filters=32, kernel_size=3, activation='relu', input_shape=input_shape))  # 1st layer
-    model.add(tf.keras.layers.Conv1D(filters=64, kernel_size=3, activation='relu'))  # 2nd layer
-    model.add(tf.keras.layers.Conv1D(filters=64, kernel_size=3, activation='relu'))  # 3rd layer
-    model.add(tf.keras.layers.Conv1D(filters=128, kernel_size=3, activation='relu'))  # 4th layer
-    model.add(tf.keras.layers.Flatten())
-    model.add(tf.keras.layers.Dense(128, activation='relu'))  # Fully connected for Q-value learning
-    model.add(tf.keras.layers.Dense(n_actions, activation=None))  # Output Q-values for all actions
+        r = self.data @ np.full(self.data.shape[1], 1 / self.data.shape[1]).T
+        self.returns_equal_weights = np.cumprod(r + 1) - 1
+    
+    def plot(self):
+        plt.plot(self.cum_return, label="model performance")
+        plt.plot(self.returns_equal_weights, label="equal weights performance")
+        plt.show()
+
+def construct_dqn_1(n_actions, input_shape):
+    inputs = tf.keras.layers.Input(shape=input_shape)
+    x = tf.keras.layers.Conv1D(32, 3, activation='relu')(inputs)
+    x = tf.keras.layers.Conv1D(64, 3, activation='relu')(x)
+    x = tf.keras.layers.Conv1D(64, 3, activation='relu')(x)
+    x = tf.keras.layers.Conv1D(128, 3, activation='relu')(x)
+    x = tf.keras.layers.Flatten()(x)
+    x = tf.keras.layers.Dense(128, activation='relu')(x)
+    outputs = tf.keras.layers.Dense(n_actions)(x)  # No activation for raw Q-values
+    model = tf.keras.models.Model(inputs, outputs)
     return model
 
-def construct_dqn_2(
-        n_actions, input_shape
-):
-    model = tf.keras.models.Sequential()
-    # Add LSTM recurrent layer
-    model.add(tf.keras.layers.LSTM(64, input_shape=input_shape))
-    # Add dense layer(s) for Q-value mapping
-    model.add(tf.keras.layers.Dense(128, activation='relu'))
-    model.add(tf.keras.layers.Dense(n_actions, activation=None)) # Q-values for all actions
+def construct_dqn_2(n_actions, input_shape):
+    inputs = tf.keras.layers.Input(shape=input_shape)
+    x = tf.keras.layers.LSTM(64)(inputs)
+    x = tf.keras.layers.Dense(128, activation='relu')(x)
+    outputs = tf.keras.layers.Dense(n_actions)(x)
+    model = tf.keras.models.Model(inputs, outputs)
     return model
 
-def construct_dqn_3(
-        n_actions, input_shape
-):
-    model = tf.keras.models.Sequential()
-    # Add GRU recurrent layer
-    model.add(tf.keras.layers.GRU(64, input_shape=input_shape))
-    # Add dense layer(s) for Q-value mapping
-    model.add(tf.keras.layers.Dense(128, activation='relu'))
-    model.add(tf.keras.layers.Dense(n_actions, activation=None)) # Q-values for all actions
+def construct_dqn_3(n_actions, input_shape):
+    inputs = tf.keras.layers.Input(shape=input_shape)
+    x = tf.keras.layers.GRU(64)(inputs)
+    x = tf.keras.layers.Dense(128, activation='relu')(x)
+    outputs = tf.keras.layers.Dense(n_actions)(x)
+    model = tf.keras.models.Model(inputs, outputs)
     return model
+
+def construct_pacman_model():
+    # Suppose input channels encode: {wall, pellet, power-pellet, Pac-Man, ghosts}
+    # Update shape as needed: (height, width, channels)
+    inputs = tf.keras.layers.Input(shape=(19, 19))
+
+    x = tf.keras.layers.Conv2D(32, 3, activation="relu", padding="same")(inputs)
+    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.Flatten()(x)
+
+    x = tf.keras.layers.Dense(128, activation="relu")(x)
+    x = tf.keras.layers.Dense(64, activation="relu")(x)
+    outputs = tf.keras.layers.Dense(4)(x)  # 4 actions: up, down, left, right
+
+    model = tf.keras.models.Model(inputs, outputs)
+    return model
+
+
+class PacmanModel:
+    def __init__(self):
+        pass
