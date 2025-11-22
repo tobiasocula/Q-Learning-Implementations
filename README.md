@@ -8,6 +8,8 @@ Read more: https://en.wikipedia.org/wiki/Q-learning
 
 In my implementation (in the folder QLearning), I implement this with the state space being the set of possible financial regimes, determined by the volatility of returns. The action space will be the different asset weigts one can have in the portfolio.
 
+Since this approach is very limited for financial data, I just made this as a starting point, meant for experimentation only.
+
 ### Deep Q-Learning
 
 In Deep Q-Learning, we use a neural network instead of a Q-table to keep track of the Q-values for each action and state.

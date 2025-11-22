@@ -38,6 +38,9 @@ class Tester:
         ax1.set_ylabel("losses")
         ax2.set_ylabel("average Q values")
         ax3.set_ylabel("rewards")
+        ax1.legend()
+        ax2.legend()
+        ax3.legend()
         plt.show()
 
     def save_all(self, dirname):
@@ -47,40 +50,6 @@ class Tester:
         for i, m in enumerate(self.models):
             m.save(dirname=dirname, modelname=f"model_{i}")
 
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = []
-        self.capacity = capacity
-        self.len = 0
-        self.pos = 0
-    def sample(self, size):
-        # returns random sequence of lists (state, reward, action, next_state)
-        if self.len < size:
-            return self.buffer
-        indices = np.random.choice(self.len, size=size, replace=False)
-        return [self.buffer[i] for i in indices]
-
-    def update(self, state, reward, action, next_state, done):
-        if self.len < self.capacity:
-            self.buffer.append([state, reward, action, next_state, done])
-            self.len += 1
-        else:
-            self.buffer[self.pos] = [state, reward, action, next_state, done]
-        self.pos = (self.pos + 1) % self.capacity
-        
-    def categorize_samples(self, samples):
-        states = []
-        rewards = []
-        actions = []
-        next_states = []
-        dones = []
-        for s in samples:
-            states.append(s[0])
-            rewards.append(s[1])
-            actions.append(s[2])
-            next_states.append(s[3])
-            dones.append(s[4])
-        return np.array(states), np.array(rewards), np.array(actions), np.array(next_states), np.array(dones)
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -88,34 +57,39 @@ class ReplayBuffer:
         self.capacity = capacity
         self.len = 0
         self.pos = 0
+        self.feature_dim = None
+        self.training_lookback_period = None
     def sample(self, size):
         # returns random sequence of lists (state, reward, action, next_state)
         if self.len < size:
             return self.buffer
+        
         indices = np.random.choice(self.len, size=size, replace=False)
-        return [self.buffer[i] for i in indices]
+
+        states = np.empty((size, self.training_lookback_period, self.feature_dim))
+        rewards = np.empty(size)
+        actions = np.empty(size)
+        next_states = np.empty((size, self.training_lookback_period, self.feature_dim))
+        dones = np.empty(size)
+
+        for j, i in enumerate(indices):
+            states[j, :, :] = self.buffer[i][0]
+            rewards[j] = self.buffer[i][1]
+            actions[j] = self.buffer[i][2]
+            next_states[j, :, :] = self.buffer[i][3]
+            dones[j] = self.buffer[i][4]
+
+        return states, rewards, actions, next_states, dones
 
     def update(self, state, reward, action, next_state, done):
+        if state is not None:
+            self.training_lookback_period, self.feature_dim = state.shape
         if self.len < self.capacity:
             self.buffer.append([state, reward, action, next_state, done])
             self.len += 1
         else:
             self.buffer[self.pos] = [state, reward, action, next_state, done]
         self.pos = (self.pos + 1) % self.capacity
-        
-    def categorize_samples(self, samples):
-        states = []
-        rewards = []
-        actions = []
-        next_states = []
-        dones = []
-        for s in samples:
-            states.append(s[0])
-            rewards.append(s[1])
-            actions.append(s[2])
-            next_states.append(s[3])
-            dones.append(s[4])
-        return np.array(states), np.array(rewards), np.array(actions), np.array(next_states), np.array(dones)
 
 class Model1:
     def __init__(self,
@@ -129,7 +103,7 @@ class Model1:
         ):
         self.gamma = gamma
         self.action_space = action_space
-        self.n_assets, self.n_actions = action_space.shape
+        self.n_actions, self.n_assets = action_space.shape
         self.training_lookback_period = training_lookback_period
         self.state_space = state_space
         self.cov = np.cov(self.state_space, rowvar=False)
@@ -138,11 +112,13 @@ class Model1:
         self.replay_buffer = ReplayBuffer(rep_buffer_size)
         self.model = construct_dqn_1(self.n_actions, (self.training_lookback_period, self.features_dim))
         self.model.compile(optimizer='adam', loss='mse')
-        self.state = None
         self.rb_sample_size = rb_sample_size
+        self.state = None
+
+        self.trained = False
 
     def step(self, action, t):
-        weights = self.action_space[:, action]
+        weights = self.action_space[action, :]
         ret = np.dot(weights, self.state_space[t, :])
         portfolio_variance = weights.T @ self.cov @ weights
         reward = ret / np.sqrt(portfolio_variance)
@@ -158,7 +134,7 @@ class Model1:
             subset = np.expand_dims(subset, axis=0)
             Q_values = self.model.predict(subset) # size (n_actions)
             action = np.argmax(Q_values)
-            
+
             # determine next action, reward, done and state
             new_state, reward, done = self.step(action, t)
             reward_list.append(reward)
@@ -167,20 +143,32 @@ class Model1:
             self.state = new_state
             if t >= self.t_replay_buffer:
                 # sample from replay buffer
-                samples = self.replay_buffer.sample(size=self.rb_sample_size) # array of length rb_sample_size
-                # one (state, reward, action, next_state, done) per action
-                states, rewards, actions, next_states, dones = self.replay_buffer.categorize_samples(samples)
+                # shape of states and next_states: (batch_size, lookback, features)
+                # others are just shape (batch_size,)
+                states, rewards, actions, next_states, dones = self.replay_buffer.sample(size=self.rb_sample_size)
+
                 current_Q = self.model.predict_on_batch(states) # shape: (batch, n_actions)
                 avg_q_values.append(np.mean(current_Q, axis=1))
                 next_Q = self.model.predict_on_batch(next_states) # shape: (batch, n_actions)
                 max_next_Q = np.max(next_Q, axis=1) # shape: (batch)
                 target_Q = current_Q.copy() # shape (rb_sample_size, n_actions)
                 for i in range(self.rb_sample_size):
-                    target_Q[i, actions[i]] = rewards[i] + self.gamma * (0 if dones[i] else 1) * max_next_Q[i]
+                    target_Q[i, int(actions[i])] = rewards[i] + self.gamma * (0 if dones[i] else 1) * max_next_Q[i]
                 # train model on one batch
                 loss = self.model.train_on_batch(states, target_Q)
                 losses.append(loss)
+
+        self.trained = True
+
         return losses, avg_q_values, reward_list
+    
+    def save(self, dirname: Path, modelname: str):
+
+        if not self.trained:
+            raise AssertionError()
+
+        Path(dirname).mkdir(parents=True, exist_ok=True)
+        self.model.save(Path(dirname) / f"{modelname}.keras")
 
 class Model2:
     def __init__(self,
@@ -196,7 +184,7 @@ class Model2:
         ):
         self.gamma = gamma
         self.action_space = action_space
-        self.n_assets, self.n_actions = action_space.shape
+        self.n_actions, self.n_assets = action_space.shape
         self.training_lookback_period = training_lookback_period
         self.state_space = state_space
         self.state = self.state_space[:training_lookback_period, :]
@@ -214,7 +202,7 @@ class Model2:
         self.trained = False
 
     def step(self, action, t):
-        weights = self.action_space[:, action]
+        weights = self.action_space[action, :]
         ret = np.dot(weights, self.state_space[t, :])
         portfolio_variance = weights.T @ self.cov @ weights
         reward = ret / np.sqrt(portfolio_variance)
@@ -231,7 +219,7 @@ class Model2:
             subset = np.expand_dims(subset, axis=0)
             Q_values = self.main_model.predict(subset) # size (n_actions)
             action = np.argmax(Q_values)
-            
+
             # determine next action, reward, done and state
             new_state, reward, done = self.step(action, t)
             reward_list.append(reward)
@@ -240,8 +228,7 @@ class Model2:
             self.state = new_state
             if t >= self.t_replay_buffer:
                 # sample from replay buffer
-                samples = self.replay_buffer.sample(size=self.batch_size) # array of length rb_sample_size
-                states, rewards, actions, next_states, dones = self.replay_buffer.categorize_samples(samples)
+                states, rewards, actions, next_states, dones = self.replay_buffer.sample(size=self.batch_size)
 
                 current_Q = self.main_model.predict_on_batch(states) # (batch_size, n_actions)
                 avg_q_values.append(np.mean(current_Q, axis=1))
@@ -281,36 +268,39 @@ class Model2:
 class ModelDeployer:
     def __init__(self, modelpath, data, action_space):
         """data is a T x (n_features) matrix (return matrix)
-        action_space is a (n_features) x (n_actions) matrix"""
+        action_space is a (n_actions) x (n_features) matrix"""
+        print('data shape:'); print(data.shape)
         self.model = tf.keras.models.load_model(modelpath)
         self.data = data
         self.action_space = action_space
+        self.period = self.model.input_shape[1]
 
-    def run(self, period):
-        if period > self.data.shape[0]:
-            raise AssertionError()
+    def run(self):
         
-        return_sequence = np.empty(self.data.shape[0] - period)
-        for t in range(period, self.data.shape[0]):
-            subset = self.data[t - period:t, :]
+        return_sequence = np.empty(self.data.shape[0] - self.period)
+        for t in range(self.period, self.data.shape[0]):
+            subset = self.data[t - self.period:t, :]
+            subset = np.expand_dims(subset, axis=0)
             Q_values = self.model.predict(subset)
             action_idx = np.argmax(Q_values)
-            weights = self.action_space[:, action_idx]
+            weights = self.action_space[action_idx, :]
             result_return = np.dot(weights, self.data[t, :])
-            return_sequence[t] = result_return
+            return_sequence[t - self.period] = result_return
 
         self.returns = return_sequence
         self.cum_return = np.cumprod(self.returns + 1) - 1
         self.returns_vola_ann = pd.Series(self.returns).rolling(252, min_periods=1).std().to_numpy()
-        self.sharpe = 255 * np.mean(self.cum_return) / (np.std(self.returns) * np.sqrt(255))
-        self.sortino = 255 * np.mean(self.cum_return) / (np.std(self.returns[self.returns < 0]) * np.sqrt(255))
+        self.sharpe = (np.mean(self.returns) / np.std(self.returns)) * np.sqrt(255)
+        self.sortino = (np.mean(self.returns) / np.std(self.returns[self.returns < 0])) * np.sqrt(255)
 
         r = self.data @ np.full(self.data.shape[1], 1 / self.data.shape[1]).T
         self.returns_equal_weights = np.cumprod(r + 1) - 1
+        return self.returns, self.cum_return, self.returns_vola_ann, self.sharpe, self.sortino, self.returns_equal_weights
     
     def plot(self):
         plt.plot(self.cum_return, label="model performance")
         plt.plot(self.returns_equal_weights, label="equal weights performance")
+        plt.legend()
         plt.show()
 
 def construct_dqn_1(n_actions, input_shape):
@@ -341,24 +331,3 @@ def construct_dqn_3(n_actions, input_shape):
     model = tf.keras.models.Model(inputs, outputs)
     return model
 
-def construct_pacman_model():
-    # Suppose input channels encode: {wall, pellet, power-pellet, Pac-Man, ghosts}
-    # Update shape as needed: (height, width, channels)
-    inputs = tf.keras.layers.Input(shape=(19, 19))
-
-    x = tf.keras.layers.Conv2D(32, 3, activation="relu", padding="same")(inputs)
-    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
-    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
-    x = tf.keras.layers.Flatten()(x)
-
-    x = tf.keras.layers.Dense(128, activation="relu")(x)
-    x = tf.keras.layers.Dense(64, activation="relu")(x)
-    outputs = tf.keras.layers.Dense(4)(x)  # 4 actions: up, down, left, right
-
-    model = tf.keras.models.Model(inputs, outputs)
-    return model
-
-
-class PacmanModel:
-    def __init__(self):
-        pass
