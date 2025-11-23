@@ -98,6 +98,7 @@ class Model1:
         rb_sample_size,
         action_space,
         gamma,
+        epsilon_decay,
         training_lookback_period = 5,
         t_replay_buffer = 30
         ):
@@ -129,11 +130,16 @@ class Model1:
         losses = []
         avg_q_values = []
         reward_list = []
+        eps = 1.0
         for t in range(self.training_lookback_period, self.T):
-            subset = self.state_space[t - self.training_lookback_period:t, :]
-            subset = np.expand_dims(subset, axis=0)
-            Q_values = self.model.predict(subset) # size (n_actions)
-            action = np.argmax(Q_values)
+            if np.random.uniform() <= eps:
+                action = np.random.randint(0, self.n_actions)
+            else:
+                subset = self.state_space[t - self.training_lookback_period:t, :]
+                subset = np.expand_dims(subset, axis=0)
+                Q_values = self.model.predict(subset) # size (n_actions)
+                action = np.argmax(Q_values)
+            eps *= self.epsilon_decay
 
             # determine next action, reward, done and state
             new_state, reward, done = self.step(action, t)
@@ -180,8 +186,10 @@ class Model2:
         target_update_freq,
         training_lookback_period,
         t_replay_buffer,
-        model_constructor: callable
+        model_constructor,
+        epsilon_decay
         ):
+        self.epsilon_decay = epsilon_decay
         self.gamma = gamma
         self.action_space = action_space
         self.n_actions, self.n_assets = action_space.shape
@@ -214,11 +222,16 @@ class Model2:
         losses = []
         avg_q_values = []
         reward_list = []
+        eps = 1.0
         for t in range(self.training_lookback_period, self.T):
-            subset = self.state_space[t - self.training_lookback_period:t, :]
-            subset = np.expand_dims(subset, axis=0)
-            Q_values = self.main_model.predict(subset) # size (n_actions)
-            action = np.argmax(Q_values)
+            if np.random.uniform() <= eps:
+                action = np.random.randint(0, self.n_actions)
+            else:
+                subset = self.state_space[t - self.training_lookback_period:t, :]
+                subset = np.expand_dims(subset, axis=0)
+                Q_values = self.main_model.predict(subset) # size (n_actions)
+                action = np.argmax(Q_values)
+            eps *= self.epsilon_decay
 
             # determine next action, reward, done and state
             new_state, reward, done = self.step(action, t)
