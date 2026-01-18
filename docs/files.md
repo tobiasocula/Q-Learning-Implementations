@@ -6,7 +6,7 @@ Here we use a singular DQN instance and a replay buffer.
 
 ##### using_target_network.ipynb
 
-A second implementation, where we use two separate DQN instances and a so-called Dual DQN strategy.
+A second implementation, where we use two separate DQN instances and a so-called Dual DQN strategy (see main page for explanation).
 
 ##### constructing_models.py
 

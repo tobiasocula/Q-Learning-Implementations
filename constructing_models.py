@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import tensorflow as tf
+import json
 import pandas as pd
 
 """
@@ -9,49 +10,6 @@ import pandas as pd
 contains code for all applications made within this folder, being classes and functions.
 
 """
-
-class Tester:
-
-    def __init__(self, *model_args):
-        self.models = []
-        for ma in model_args:
-            model = Model2(*ma)
-            self.models.append(model)
-
-    def train_all(self):
-        total_losses = []
-        total_avg_q_values = []
-        total_reward_list = []
-        for ma in self.models:
-            ma.train()
-            total_losses.append(ma.losses)
-            total_avg_q_values.append(ma.avg_q_values)
-            total_reward_list.append(ma.reward_list)
-        self.total_losses = total_losses
-        self.total_avg_q_values = total_avg_q_values
-        self.total_reward_list = total_reward_list
-
-    def show_stats(self):
-        fig, (ax1, ax2, ax3) = plt.subplots(3)
-        for i, (l, a, r) in enumerate(zip(self.total_losses, self.total_avg_q_values, self.total_reward_list)):
-            ax1.plot(l, label=f"model {i}")
-            ax2.plot(a, label=f"model {i}")
-            ax3.plot(r, label=f"model {i}")
-        ax1.set_ylabel("losses")
-        ax2.set_ylabel("average Q values")
-        ax3.set_ylabel("rewards")
-        ax1.legend()
-        ax2.legend()
-        ax3.legend()
-        plt.show()
-
-    def save_all(self, dirname):
-        if not all([m.trained for m in self.models]):
-            raise AssertionError()
-        
-        for i, m in enumerate(self.models):
-            m.save(dirname=dirname, modelname=f"model_{i}")
-
 
 class ReplayBuffer:
 
@@ -201,8 +159,10 @@ class Model2:
         training_lookback_period,
         t_replay_buffer,
         model_constructor,
-        epsilon_decay
+        epsilon_decay,
+        model_constructor_name = None
         ):
+        self.model_constructor_name = model_constructor_name
         self.epsilon_decay = epsilon_decay
         self.gamma = gamma
         self.action_space = action_space
@@ -261,7 +221,7 @@ class Model2:
 
                 # choose Q-values using main network
                 current_Q = self.main_model.predict_on_batch(states) # (batch_size, n_actions)
-                avg_q_values.append(np.mean(current_Q, axis=1))
+                avg_q_values.append(np.mean(current_Q, axis=1).tolist())
 
                 # choose next Q-values using main network and evaluate on target
                 next_Q_main = self.main_model.predict_on_batch(next_states) # (batch_size, n_actions)
@@ -281,7 +241,7 @@ class Model2:
 
                 # train model on one batch (gradient step for updating main's parameters)
                 loss = self.main_model.train_on_batch(states, target_Q)
-                losses.append(loss)
+                losses.append(float(loss))
 
                 # every target_update_freq steps: copy weights to target model
                 if step % self.target_update_freq == 0:
@@ -289,9 +249,9 @@ class Model2:
 
             step += 1
 
-        self.losses = losses
-        self.avg_q_values = avg_q_values
-        self.reward_list = reward_list
+        self.losses = losses # (n_iterations)
+        self.avg_q_values = avg_q_values # (n_batches, n_iterations)
+        self.reward_list = reward_list # (n_iterations)
 
         self.trained = True
 
@@ -302,6 +262,25 @@ class Model2:
 
         Path(dirname).mkdir(parents=True, exist_ok=True)
         self.main_model.save(Path(dirname) / f"{modelname}.keras")
+
+        if (dirname / "info.json").exists() and (dirname / "info.json").stat().st_size > 0:
+            with open(dirname / "info.json", "r") as f:
+                data = json.load(f)
+        else:
+            data = {}
+
+        data[modelname] = {
+            "loss": self.losses,
+            "avg_q_values": self.avg_q_values,
+            "rewards": self.reward_list,
+            "discount_factor": self.gamma,
+            "target_update_freq": self.target_update_freq,
+            "epsilon_decay": self.epsilon_decay,
+            "model_constructor": self.model_constructor_name
+        }
+        with open(dirname / "info.json", "w") as f:
+            json.dump(data, f)
+
 
 """
 Class for deploying (= using) a DQN model.
@@ -338,8 +317,9 @@ class ModelDeployer:
         self.sortino = (np.mean(self.returns) / np.std(self.returns[self.returns < 0])) * np.sqrt(255)
 
         r = self.data @ np.full(self.data.shape[1], 1 / self.data.shape[1]).T
-        self.returns_equal_weights = np.cumprod(r + 1) - 1
-        return self.returns, self.cum_return, self.returns_vola_ann, self.sharpe, self.sortino, self.returns_equal_weights
+        self.returns_equal_weights_cum = np.cumprod(r + 1) - 1
+        self.returns_equal_weights = r
+        return self.returns, self.cum_return, self.returns_vola_ann, self.sharpe, self.sortino, self.returns_equal_weights, self.returns_equal_weights_cum
     
     def plot(self):
         plt.plot(self.cum_return, label="model performance")

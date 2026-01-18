@@ -1,7 +1,7 @@
 import numpy as np
 
 """
-Heston model
+Heston model: used for genetic price generation
 """
 
 def generate_volatility(V0, xi, kappa, theta, N, dt):
