@@ -11,11 +11,13 @@ contains code for all applications made within this folder, being classes and fu
 """
 
 class Tester:
+
     def __init__(self, *model_args):
         self.models = []
         for ma in model_args:
             model = Model2(*ma)
             self.models.append(model)
+
     def train_all(self):
         total_losses = []
         total_avg_q_values = []
@@ -52,6 +54,7 @@ class Tester:
 
 
 class ReplayBuffer:
+
     def __init__(self, capacity):
         self.buffer = []
         self.capacity = capacity
@@ -59,6 +62,7 @@ class ReplayBuffer:
         self.pos = 0
         self.feature_dim = None
         self.training_lookback_period = None
+
     def sample(self, size):
         # returns random sequence of lists (state, reward, action, next_state)
         if self.len < size:
@@ -90,6 +94,11 @@ class ReplayBuffer:
         else:
             self.buffer[self.pos] = [state, reward, action, next_state, done]
         self.pos = (self.pos + 1) % self.capacity
+
+
+"""
+Model instance number 1: simple DQN without dual neural net
+"""
 
 class Model1:
     def __init__(self,
@@ -176,6 +185,11 @@ class Model1:
         Path(dirname).mkdir(parents=True, exist_ok=True)
         self.model.save(Path(dirname) / f"{modelname}.keras")
 
+
+"""
+Model instance number 2: using target- and train neural networks
+"""
+
 class Model2:
     def __init__(self,
         state_space,
@@ -203,6 +217,7 @@ class Model2:
         self.main_model = model_constructor(self.n_actions, (self.training_lookback_period, self.features_dim))
         self.main_model.compile(optimizer='adam', loss='mse')
         self.target_model = model_constructor(self.n_actions, (self.training_lookback_period, self.features_dim))
+        # initially: exact copy of main network
         self.target_model.set_weights(self.main_model.get_weights())
         self.batch_size = rb_sample_size
         self.target_update_freq = target_update_freq
@@ -224,6 +239,7 @@ class Model2:
         reward_list = []
         eps = 1.0
         for t in range(self.training_lookback_period, self.T):
+            # with probability eps: choose random action. otherwise choose best action
             if np.random.uniform() <= eps:
                 action = np.random.randint(0, self.n_actions)
             else:
@@ -243,22 +259,31 @@ class Model2:
                 # sample from replay buffer
                 states, rewards, actions, next_states, dones = self.replay_buffer.sample(size=self.batch_size)
 
+                # choose Q-values using main network
                 current_Q = self.main_model.predict_on_batch(states) # (batch_size, n_actions)
                 avg_q_values.append(np.mean(current_Q, axis=1))
 
+                # choose next Q-values using main network and evaluate on target
                 next_Q_main = self.main_model.predict_on_batch(next_states) # (batch_size, n_actions)
                 next_Q_target = self.target_model.predict_on_batch(next_states) # (batch_size, n_actions)
 
+                # choose action using sampled Q-value
                 actions = np.argmax(next_Q_main, axis=1) # (batch_size)
+            
+                # evaluated Q-values for each sample in batch-size
                 actual_Q = next_Q_target[np.arange(self.batch_size), actions] # (batch_size)
 
                 target_Q = next_Q_main.copy()
                 
                 for i in range(self.batch_size):
+                    # bellman equation for computing target Q-value
                     target_Q[i, actions[i]] = rewards[i] + self.gamma * (0 if dones[i] else 1) * actual_Q[i]
-                # train model on one batch
+
+                # train model on one batch (gradient step for updating main's parameters)
                 loss = self.main_model.train_on_batch(states, target_Q)
                 losses.append(loss)
+
+                # every target_update_freq steps: copy weights to target model
                 if step % self.target_update_freq == 0:
                     self.target_model.set_weights(self.main_model.get_weights())
 
@@ -278,11 +303,16 @@ class Model2:
         Path(dirname).mkdir(parents=True, exist_ok=True)
         self.main_model.save(Path(dirname) / f"{modelname}.keras")
 
+"""
+Class for deploying (= using) a DQN model.
+Uses the model on given 'data' parameter.
+"""
+
 class ModelDeployer:
     def __init__(self, modelpath, data, action_space):
         """data is a T x (n_features) matrix (return matrix)
         action_space is a (n_actions) x (n_features) matrix"""
-        print('data shape:'); print(data.shape)
+
         self.model = tf.keras.models.load_model(modelpath)
         self.data = data
         self.action_space = action_space
@@ -300,6 +330,7 @@ class ModelDeployer:
             result_return = np.dot(weights, self.data[t, :])
             return_sequence[t - self.period] = result_return
 
+        # collect statistics
         self.returns = return_sequence
         self.cum_return = np.cumprod(self.returns + 1) - 1
         self.returns_vola_ann = pd.Series(self.returns).rolling(252, min_periods=1).std().to_numpy()
@@ -315,6 +346,15 @@ class ModelDeployer:
         plt.plot(self.returns_equal_weights, label="equal weights performance")
         plt.legend()
         plt.show()
+
+
+"""
+Some DQN model versions.
+The versions include:
+-using multiple convolutional layers
+-using a long-short term memory layer + dense layers
+-using  a GRU layer
+"""
 
 def construct_dqn_1(n_actions, input_shape):
     inputs = tf.keras.layers.Input(shape=input_shape)

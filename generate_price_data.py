@@ -1,5 +1,9 @@
 import numpy as np
 
+"""
+Heston model
+"""
+
 def generate_volatility(V0, xi, kappa, theta, N, dt):
     V = np.empty(N)
     V[0] = V0
