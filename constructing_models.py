@@ -175,7 +175,10 @@ class Model2:
         self.t_replay_buffer = t_replay_buffer
         self.replay_buffer = ReplayBuffer(rb_capacity)
         self.main_model = model_constructor(self.n_actions, (self.training_lookback_period, self.features_dim))
-        self.main_model.compile(optimizer='adam', loss='mse')
+        self.main_model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss='huber'
+        )
         self.target_model = model_constructor(self.n_actions, (self.training_lookback_period, self.features_dim))
         # initially: exact copy of main network
         self.target_model.set_weights(self.main_model.get_weights())
@@ -298,7 +301,7 @@ class ModelDeployer:
         self.period = self.model.input_shape[1]
 
     def run(self):
-        
+
         return_sequence = np.empty(self.data.shape[0] - self.period)
         for t in range(self.period, self.data.shape[0]):
             subset = self.data[t - self.period:t, :]
@@ -339,28 +342,35 @@ The versions include:
 def construct_dqn_1(n_actions, input_shape):
     inputs = tf.keras.layers.Input(shape=input_shape)
     x = tf.keras.layers.Conv1D(32, 3, activation='relu')(inputs)
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Conv1D(64, 3, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Conv1D(64, 3, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Conv1D(128, 3, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Flatten()(x)
     x = tf.keras.layers.Dense(128, activation='relu')(x)
-    outputs = tf.keras.layers.Dense(n_actions)(x)  # No activation for raw Q-values
-    model = tf.keras.models.Model(inputs, outputs)
-    return model
+    x = tf.keras.layers.Dropout(0.2)(x)
+    outputs = tf.keras.layers.Dense(n_actions)(x)  # No dropout here
+    return tf.keras.models.Model(inputs, outputs)
+
 
 def construct_dqn_2(n_actions, input_shape):
     inputs = tf.keras.layers.Input(shape=input_shape)
-    x = tf.keras.layers.LSTM(64)(inputs)
+    x = tf.keras.layers.LSTM(64, dropout=0.2, recurrent_dropout=0.2)(inputs)  # Built-in for RNNs
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Dense(128, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
     outputs = tf.keras.layers.Dense(n_actions)(x)
-    model = tf.keras.models.Model(inputs, outputs)
-    return model
+    return tf.keras.models.Model(inputs, outputs)
+
 
 def construct_dqn_3(n_actions, input_shape):
     inputs = tf.keras.layers.Input(shape=input_shape)
-    x = tf.keras.layers.GRU(64)(inputs)
+    x = tf.keras.layers.GRU(64, dropout=0.2, recurrent_dropout=0.2)(inputs)  # Built-in
+    x = tf.keras.layers.Dropout(0.2)(x)
     x = tf.keras.layers.Dense(128, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
     outputs = tf.keras.layers.Dense(n_actions)(x)
-    model = tf.keras.models.Model(inputs, outputs)
-    return model
-
+    return tf.keras.models.Model(inputs, outputs)
