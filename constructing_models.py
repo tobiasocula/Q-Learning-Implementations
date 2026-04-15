@@ -69,6 +69,7 @@ class Model1:
         training_lookback_period = 5,
         t_replay_buffer = 30
         ):
+        self.epsilon_decay = epsilon_decay
         self.gamma = gamma
         self.action_space = action_space
         self.n_actions, self.n_assets = action_space.shape
@@ -89,7 +90,7 @@ class Model1:
         weights = self.action_space[action, :]
         ret = np.dot(weights, self.state_space[t, :])
         portfolio_variance = weights.T @ self.cov @ weights
-        reward = ret / np.sqrt(portfolio_variance)
+        reward = ret / np.sqrt(portfolio_variance) # use sharpe as reward
         next_state = self.state_space[t - self.training_lookback_period:t, :]
         return next_state, reward, t == self.T
 
@@ -313,22 +314,26 @@ class ModelDeployer:
             return_sequence[t - self.period] = result_return
 
         # collect statistics
-        self.returns = return_sequence
-        self.cum_return = np.cumprod(self.returns + 1) - 1
-        self.returns_vola_ann = pd.Series(self.returns).rolling(252, min_periods=1).std().to_numpy()
-        self.sharpe = (np.mean(self.returns) / np.std(self.returns)) * np.sqrt(255)
-        self.sortino = (np.mean(self.returns) / np.std(self.returns[self.returns < 0])) * np.sqrt(255)
+        cum_return = np.cumprod(return_sequence + 1) - 1
+        returns_vola_ann = pd.Series(return_sequence).rolling(252, min_periods=1).std().to_numpy()
+        sharpe = (np.mean(return_sequence) / np.std(return_sequence)) * np.sqrt(255)
+        sortino = (np.mean(return_sequence) / np.std(return_sequence[return_sequence < 0])) * np.sqrt(255)
+        ann_returns_mean = np.sqrt(255) * np.mean(return_sequence)
 
-        r = self.data @ np.full(self.data.shape[1], 1 / self.data.shape[1]).T
-        self.returns_equal_weights_cum = np.cumprod(r + 1) - 1
-        self.returns_equal_weights = r
-        return self.returns, self.cum_return, self.returns_vola_ann, self.sharpe, self.sortino, self.returns_equal_weights, self.returns_equal_weights_cum
-    
-    def plot(self):
-        plt.plot(self.cum_return, label="model performance")
-        plt.plot(self.returns_equal_weights, label="equal weights performance")
-        plt.legend()
-        plt.show()
+        returns_eqw = self.data @ np.full(self.data.shape[1], 1 / self.data.shape[1]).T
+        cumreturns_eqw = np.cumprod(returns_eqw + 1) - 1
+        returns_vola_ann_eqw = pd.Series(returns_eqw).rolling(252, min_periods=1).std().to_numpy()
+        sharpe_eqw = (np.mean(returns_eqw) / np.std(returns_eqw)) * np.sqrt(255)
+        sortino_eqw = (np.mean(returns_eqw) / np.std(returns_eqw[returns_eqw < 0])) * np.sqrt(255)
+        ann_returns_eqw_mean = np.sqrt(255) * np.mean(returns_eqw)
+
+        return pd.DataFrame({
+            "mean_returns": [ann_returns_eqw_mean, ann_returns_mean],
+            "sharpe": [sharpe_eqw, sharpe],
+            "sortino": [sortino_eqw, sortino],
+            "mean_ann_volatility": [np.mean(returns_vola_ann_eqw[1:]), np.mean(returns_vola_ann[1:])]
+        }, index=["equal_weights", "dqn_weights"]
+        ), cumreturns_eqw, cum_return, returns_vola_ann[1:], returns_vola_ann_eqw[1:]
 
 
 """
@@ -336,7 +341,7 @@ Some DQN model versions.
 The versions include:
 -using multiple convolutional layers
 -using a long-short term memory layer + dense layers
--using  a GRU layer
+-using a GRU layer
 """
 
 def construct_dqn_1(n_actions, input_shape):
